@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.4 },
   fill: { position: 'absolute', top: 0, bottom: 0, left: 0, backgroundColor: 'rgba(255,255,255,0.25)' },
   content: { alignItems: 'center', padding: 12, gap: 4 },
-  label: { fontFamily: appFont, fontSize: 16, fontWeight: '600', color: '#241C17' },
+  label: { fontFamily: appFont, fontSize: 18, fontWeight: '600', color: '#241C17' },
   hint: { fontFamily: appFont, fontSize: 11, color: '#493023' },
   light: { color: colors.textPrimary },
 });

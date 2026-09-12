@@ -1,5 +1,5 @@
 import { ActiveFast, FastEntry } from './src/types';
-import { AppState, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppState, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import Animated, {
   Easing,
   EntryExitAnimationFunction,
@@ -23,9 +23,13 @@ import HoldButton from './src/components/HoldButton';
 import HoursDial from './src/components/HoursDial';
 import Legend from './src/components/side-panels/Legend';
 import Logo from './src/components/layout/Logo';
+import PanelCarousel from './src/components/PanelCarousel';
 import SlidePanel from './src/components/SlidePanel';
 
 type PanelKey = 'history' | 'legend' | 'coffee';
+
+// Both mode panels share this height so the carousel never jumps.
+const MODE_PANEL_HEIGHT = 52;
 
 // Staggered entry: each section fades up slightly after the one above it.
 const ENTRY_DURATION = 520;
@@ -234,7 +238,10 @@ function Main() {
                     key={item}
                     accessibilityRole="tab"
                     accessibilityState={{ selected: mode === item }}
-                    onPress={() => setMode(item)}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setMode(item);
+                    }}
                     style={[styles.segmentItem, mode === item && styles.segmentActive]}
                   >
                     <Text style={[styles.segmentText, mode === item && styles.selectedText]}>
@@ -243,7 +250,7 @@ function Main() {
                   </Pressable>
                 ))}
               </View>
-              {mode === 'duration' ? (
+              <PanelCarousel index={mode === 'duration' ? 0 : 1} height={MODE_PANEL_HEIGHT}>
                 <View style={styles.presets}>
                   <Pressable
                     accessibilityLabel="Decrease duration by one hour"
@@ -275,7 +282,6 @@ function Main() {
                     <Text style={styles.stepText}>+</Text>
                   </Pressable>
                 </View>
-              ) : (
                 <View style={styles.timeRow}>
                   <Text style={styles.secondary}>
                     End at<Text style={styles.timeNote}>{'\n'}24-hour time</Text>
@@ -302,7 +308,7 @@ function Main() {
                     style={styles.timeInput}
                   />
                 </View>
-              )}
+              </PanelCarousel>
             </>
           )}
           <View style={styles.endSummary}>
@@ -393,7 +399,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     borderRadius: 10,
     width: 62,
-    height: 52,
+    height: MODE_PANEL_HEIGHT,
     padding: 4,
   },
   timeNote: { fontSize: 10, color: colors.textSecondary },
