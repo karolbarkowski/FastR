@@ -11,6 +11,7 @@ import { StyleSheet, View } from 'react-native';
 import Svg, { Line } from 'react-native-svg';
 import type { SvgProps } from 'react-native-svg';
 
+import { MODE_TRANSITION_MS } from '../config';
 import { RingConfig } from '../types';
 import { colors } from '../theme';
 
@@ -46,6 +47,8 @@ function polar(cx: number, cy: number, r: number, deg: number) {
 
 interface ChipProps {
   icon: FC<SvgProps>;
+  /** Whether the breakpoint falls inside the current gauge sweep. */
+  visible: boolean;
   reached: boolean;
   /** Ring center and radius the chip is seated on. */
   cx: number;
@@ -61,9 +64,13 @@ interface ChipProps {
  *
  * When the dial rescales the gauge, the chip's angle is animated (not its
  * x/y), so it slides along the ring's arc instead of cutting across it.
+ *
+ * Chips stay mounted even when their breakpoint is beyond the gauge; they
+ * scale down to nothing at the end of the arc and scale back up on return.
  */
-const MilestoneChip = React.memo(({ icon: Icon, reached, cx, cy, r, deg }: ChipProps) => {
+const MilestoneChip = React.memo(({ icon: Icon, visible, reached, cx, cy, r, deg }: ChipProps) => {
   const scale = useSharedValue(1);
+  const presence = useSharedValue(visible ? 1 : 0);
   const angle = useSharedValue(deg);
   const prevReached = useRef(reached);
 
@@ -74,11 +81,12 @@ const MilestoneChip = React.memo(({ icon: Icon, reached, cx, cy, r, deg }: ChipP
   }, [deg, angle]);
 
   useEffect(() => {
+    presence.value = withTiming(visible ? 1 : 0, { duration: MODE_TRANSITION_MS, easing: Easing.out(Easing.cubic) });
+  }, [visible, presence]);
+
+  useEffect(() => {
     if (reached && !prevReached.current) {
-      scale.value = withSequence(
-        withTiming(1.35, { duration: 160 }),
-        withSpring(1, { damping: 12, stiffness: 240 }),
-      );
+      scale.value = withSequence(withTiming(1.35, { duration: 160 }), withSpring(1, { damping: 12, stiffness: 240 }));
     }
     prevReached.current = reached;
   }, [reached, scale]);
@@ -89,13 +97,13 @@ const MilestoneChip = React.memo(({ icon: Icon, reached, cx, cy, r, deg }: ChipP
       transform: [
         { translateX: cx + r * Math.cos(rad) - MARKER_SIZE / 2 },
         { translateY: cy + r * Math.sin(rad) - MARKER_SIZE / 2 },
-        { scale: scale.value },
+        { scale: scale.value * presence.value },
       ],
     };
   });
 
   return (
-    <Animated.View style={[styles.marker, reached && styles.markerReached, chipStyle]}>
+    <Animated.View pointerEvents="none" style={[styles.marker, reached && styles.markerReached, chipStyle]}>
       <Icon width={MARKER_ICON_SIZE} height={MARKER_ICON_SIZE} />
     </Animated.View>
   );
@@ -112,9 +120,9 @@ function FastingRing({ size, totalHours, elapsedHours, config, children }: Props
   const milestones = useMemo(
     () =>
       config.breakpoints
-        .filter(bp => bp.hoursIn > 0 && bp.hoursIn < totalHours)
+        .filter(bp => bp.hoursIn > 0)
         .sort((a, b) => a.hoursIn - b.hoursIn)
-        .map(bp => ({ ...bp, frac: bp.hoursIn / totalHours })),
+        .map(bp => ({ ...bp, visible: bp.hoursIn < totalHours, frac: Math.min(bp.hoursIn / totalHours, 1) })),
     [config.breakpoints, totalHours],
   );
 
@@ -177,9 +185,18 @@ function FastingRing({ size, totalHours, elapsedHours, config, children }: Props
       {/* Milestone icon chips, seated on the tick band */}
       {milestones.map(bp => {
         const deg = START_ANGLE + SWEEP * bp.frac;
-        const reached = bp.frac <= progress + 1e-6;
+        const reached = bp.visible && bp.frac <= progress + 1e-6;
         return (
-          <MilestoneChip key={bp.effectCode} icon={bp.icon} reached={reached} cx={cx} cy={cy} r={rMarker} deg={deg} />
+          <MilestoneChip
+            key={bp.effectCode}
+            icon={bp.icon}
+            visible={bp.visible}
+            reached={reached}
+            cx={cx}
+            cy={cy}
+            r={rMarker}
+            deg={deg}
+          />
         );
       })}
 

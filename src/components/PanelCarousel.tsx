@@ -2,6 +2,8 @@ import Animated, { Easing, SharedValue, useAnimatedStyle, useSharedValue, withTi
 import React, { ReactNode, useEffect } from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 
+import { MODE_TRANSITION_MS } from '../config';
+
 interface Props {
   /** Index of the page currently shown. */
   index: number;
@@ -9,8 +11,6 @@ interface Props {
   height: number;
   children: ReactNode;
 }
-
-const SLIDE_DURATION = 280;
 
 /**
  * Horizontal pager for same-height panels. Pages sit side by side one full
@@ -23,7 +23,7 @@ function PanelCarousel({ index, height, children }: Props) {
   const progress = useSharedValue(index);
 
   useEffect(() => {
-    progress.value = withTiming(index, { duration: SLIDE_DURATION, easing: Easing.out(Easing.cubic) });
+    progress.value = withTiming(index, { duration: MODE_TRANSITION_MS, easing: Easing.out(Easing.cubic) });
   }, [index, progress]);
 
   return (

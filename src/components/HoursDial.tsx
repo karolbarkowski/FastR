@@ -2,6 +2,7 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withSpring, withTim
 import { PanResponder, StyleSheet, View } from 'react-native';
 import React, { useEffect, useRef } from 'react';
 
+import { MODE_TRANSITION_MS } from '../config';
 import { colors } from '../theme';
 
 interface Props {
@@ -64,6 +65,14 @@ function HoursDial({ value, onChange, size = 132, disabled = false }: Props) {
     });
   }, [value, rotation]);
   const rotationStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${rotation.value}deg` }] }));
+
+  // The position dot stays mounted and scales in/out as the dial is
+  // enabled/disabled, instead of popping in and out of existence.
+  const dotScale = useSharedValue(disabled ? 0 : 1);
+  useEffect(() => {
+    dotScale.value = withTiming(disabled ? 0 : 1, { duration: MODE_TRANSITION_MS, easing: Easing.out(Easing.cubic) });
+  }, [disabled, dotScale]);
+  const dotStyle = useAnimatedStyle(() => ({ transform: [{ scale: dotScale.value }] }));
 
   const angleOf = (px: number, py: number) =>
     (Math.atan2(py - center.current.y, px - center.current.x) * 180) / Math.PI;
@@ -153,7 +162,7 @@ function HoursDial({ value, onChange, size = 132, disabled = false }: Props) {
       <View style={[styles.disc, { borderRadius: radius }]}>
         {/* Rotating layer carrying the position dot */}
         <Animated.View style={[StyleSheet.absoluteFill, rotationStyle]}>
-          {!disabled && <View style={[styles.dot, { top: DOT_TOP, left: (size - DOT_SIZE) / 2 }]} />}
+          <Animated.View style={[styles.dot, { top: DOT_TOP, left: (size - DOT_SIZE) / 2 }, dotStyle]} />
         </Animated.View>
       </View>
     </Animated.View>

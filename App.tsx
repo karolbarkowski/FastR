@@ -3,7 +3,14 @@ import { AppState, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from
 import Animated, {
   Easing,
   EntryExitAnimationFunction,
+  FadeIn,
   FadeInDown,
+  FadeInLeft,
+  FadeInRight,
+  FadeOut,
+  FadeOutLeft,
+  FadeOutRight,
+  LayoutAnimationConfig,
   withDelay,
   withTiming,
 } from 'react-native-reanimated';
@@ -57,6 +64,16 @@ const ringEntry: EntryExitAnimationFunction = () => {
   };
 };
 
+// Center labels slide like the mode carousel: Duration lives on the left,
+// End time on the right. Starting/ending a fast just cross-fades.
+const LABEL_IN = 240;
+const LABEL_OUT = 180;
+const labelTransitions = {
+  duration: { entering: FadeInLeft.duration(LABEL_IN), exiting: FadeOutLeft.duration(LABEL_OUT) },
+  end: { entering: FadeInRight.duration(LABEL_IN), exiting: FadeOutRight.duration(LABEL_OUT) },
+  running: { entering: FadeIn.duration(LABEL_IN), exiting: FadeOut.duration(LABEL_OUT) },
+};
+
 function Main() {
   const insets = useSafeAreaInsets();
   const [gaugeArea, setGaugeArea] = useState({ width: 0, height: 0 });
@@ -106,6 +123,7 @@ function Main() {
     ? targetEnd
     : now + targetHours * HOUR_MS;
   const reached = running && now >= endsAt;
+  const labelKey = running ? 'running' : mode;
   const setHours = useCallback((hours: number) => setTargetHours(Math.max(1, Math.min(99, hours))), []);
   const complete = () => {
     if (activeFast) {
@@ -191,29 +209,37 @@ function Main() {
                     disabled={running || mode === 'end'}
                   />
                 </View>
-                <View style={styles.layer} pointerEvents="none">
-                  <Text style={styles.dialLabel}>{running ? 'Elapsed time' : 'Fasting duration'}</Text>
-                  <Text
-                    style={[
-                      styles.number,
-                      compactRing && styles.compactNumber,
-                      (running || mode === 'end') && styles.timer,
-                    ]}
+                <LayoutAnimationConfig skipEntering>
+                  <Animated.View
+                    key={labelKey}
+                    entering={labelTransitions[labelKey].entering}
+                    exiting={labelTransitions[labelKey].exiting}
+                    style={styles.layer}
+                    pointerEvents="none"
                   >
-                    {running
-                      ? formatElapsed(elapsedMs)
-                      : mode === 'end'
-                      ? formatDurationShort(plannedHours * HOUR_MS)
-                      : targetHours}
-                  </Text>
-                  <Text style={styles.dialLabel}>
-                    {running
-                      ? `${formatDurationShort(ringHours * HOUR_MS)} target`
-                      : mode === 'end'
-                      ? 'until your end time'
-                      : 'hours'}
-                  </Text>
-                </View>
+                    <Text style={styles.dialLabel}>{running ? 'Elapsed time' : 'Fasting duration'}</Text>
+                    <Text
+                      style={[
+                        styles.number,
+                        compactRing && styles.compactNumber,
+                        (running || mode === 'end') && styles.timer,
+                      ]}
+                    >
+                      {running
+                        ? formatElapsed(elapsedMs)
+                        : mode === 'end'
+                        ? formatDurationShort(plannedHours * HOUR_MS)
+                        : targetHours}
+                    </Text>
+                    <Text style={styles.dialLabel}>
+                      {running
+                        ? `${formatDurationShort(ringHours * HOUR_MS)} target`
+                        : mode === 'end'
+                        ? 'until your end time'
+                        : 'hours'}
+                    </Text>
+                  </Animated.View>
+                </LayoutAnimationConfig>
               </Animated.View>
             )}
           </View>
