@@ -1,5 +1,5 @@
 import { ActiveFast, FastEntry } from './src/types';
-import { AppState, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   EntryExitAnimationFunction,
@@ -10,6 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import {
+  DEFAULT_END_HOUR,
   DEFAULT_RING_CONFIG,
   DEFAULT_TARGET_HOURS,
   HISTORY_LIMIT,
@@ -22,9 +23,10 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { appFont, colors } from './src/theme';
 import { clearActiveFast, loadActiveFast, loadHistory, saveActiveFast, saveHistory } from './src/utils/storage';
 import { formatDurationShort, formatElapsed } from './src/utils/format';
-import { formatEndTime, nextEndTime } from './src/utils/time';
+import { formatClock, formatDay, formatEndTime, nextEndTime, startOfDay, timeOnDay } from './src/utils/time';
 
 import Coffee from './src/components/side-panels/Coffee';
+import EndTimeSheet, { EndTimeSelection } from './src/components/EndTimeSheet';
 import FastingRing from './src/components/FastingRing';
 import GaugeLabels from './src/components/GaugeLabels';
 import Footer from './src/components/layout/Footer';
@@ -36,7 +38,7 @@ import Logo from './src/components/layout/Logo';
 import PanelCarousel from './src/components/PanelCarousel';
 import SlidePanel from './src/components/SlidePanel';
 
-type PanelKey = 'history' | 'legend' | 'coffee';
+type PanelKey = 'history' | 'legend' | 'coffee' | 'endTime';
 
 // Both mode panels share this height so the carousel never jumps.
 const MODE_PANEL_HEIGHT = 52;
@@ -74,8 +76,11 @@ function Main() {
   const compactRing = ringSize < 260;
   const [targetHours, setTargetHours] = useState(DEFAULT_TARGET_HOURS);
   const [mode, setMode] = useState<'duration' | 'end'>('duration');
-  const [endHour, setEndHour] = useState('08');
-  const [endMinute, setEndMinute] = useState('00');
+  const [endTime, setEndTime] = useState<EndTimeSelection>(() => ({
+    day: startOfDay(nextEndTime(Date.now(), DEFAULT_END_HOUR, 0)),
+    hour: DEFAULT_END_HOUR,
+    minute: 0,
+  }));
   const [activeFast, setActiveFast] = useState<ActiveFast | null>(null);
   const [history, setHistory] = useState<FastEntry[]>([]);
   const [ready, setReady] = useState(false);
@@ -104,12 +109,13 @@ function Main() {
       sub.remove();
     };
   }, [activeFast]);
-  const validTime = /^\d{1,2}$/.test(endHour) && /^\d{1,2}$/.test(endMinute) && +endHour < 24 && +endMinute < 60;
-  const targetEnd = nextEndTime(now, +endHour || 0, +endMinute || 0);
-  const plannedHours = mode === 'end' ? (targetEnd - now) / HOUR_MS : targetHours;
+  const targetEnd = timeOnDay(endTime.day, endTime.hour, endTime.minute);
+  const validTime = targetEnd > now;
+  const plannedHours = mode === 'end' ? Math.max(0, (targetEnd - now) / HOUR_MS) : targetHours;
   const running = activeFast !== null;
   const elapsedMs = activeFast ? Math.max(0, now - activeFast.startedAt) : 0;
-  const ringHours = activeFast?.targetHours ?? plannedHours;
+  // Floor at one minute: a zero-length gauge divides by zero.
+  const ringHours = activeFast?.targetHours ?? Math.max(plannedHours, 1 / 60);
   const endsAt = activeFast
     ? activeFast.startedAt + activeFast.targetHours * HOUR_MS
     : mode === 'end'
@@ -120,15 +126,23 @@ function Main() {
   // gauge above doesn't jump.
   const modeSectionOpacity = useSharedValue(running ? 0 : 1);
   useEffect(() => {
-    if (running) {
-      Keyboard.dismiss();
-    }
     modeSectionOpacity.value = withTiming(running ? 0 : 1, {
       duration: MODE_TRANSITION_MS,
       easing: Easing.out(Easing.cubic),
     });
   }, [running, modeSectionOpacity]);
   const modeSectionStyle = useAnimatedStyle(() => ({ opacity: modeSectionOpacity.value }));
+  // End time mode already shows the finish on its picker button, so the
+  // summary row fades out there (keeping its space) until a fast starts.
+  const hideSummary = mode === 'end' && !running;
+  const summaryOpacity = useSharedValue(hideSummary ? 0 : 1);
+  useEffect(() => {
+    summaryOpacity.value = withTiming(hideSummary ? 0 : 1, {
+      duration: MODE_TRANSITION_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [hideSummary, summaryOpacity]);
+  const summaryStyle = useAnimatedStyle(() => ({ opacity: summaryOpacity.value }));
   const setHours = useCallback((hours: number) => setTargetHours(Math.max(1, Math.min(99, hours))), []);
   const complete = () => {
     if (activeFast) {
@@ -144,14 +158,13 @@ function Main() {
       saveHistory(next);
       clearActiveFast();
     } else {
-      if (!ready || (mode === 'end' && !validTime)) {
+      const startedAt = Date.now();
+      if (!ready || (mode === 'end' && targetEnd <= startedAt)) {
         return;
       }
-      const startedAt = Date.now();
       const fast = {
         startedAt,
-        targetHours:
-          mode === 'end' ? (nextEndTime(startedAt, +endHour, +endMinute) - startedAt) / HOUR_MS : targetHours,
+        targetHours: mode === 'end' ? (targetEnd - startedAt) / HOUR_MS : targetHours,
       };
       setNow(startedAt);
       setActiveFast(fast);
@@ -170,6 +183,11 @@ function Main() {
   const openHistory = useCallback(() => setOpenPanel('history'), []);
   const openLegend = useCallback(() => setOpenPanel('legend'), []);
   const closePanel = useCallback(() => setOpenPanel(null), []);
+  const openEndTime = useCallback(() => setOpenPanel('endTime'), []);
+  const closeEndTime = useCallback((selection: EndTimeSelection) => {
+    setEndTime(selection);
+    setOpenPanel(null);
+  }, []);
   const historyPanel = useMemo(
     () => <HistoryList entries={history} onDelete={deleteEntries} />,
     [history, deleteEntries],
@@ -267,10 +285,7 @@ function Main() {
                   key={item}
                   accessibilityRole="tab"
                   accessibilityState={{ selected: mode === item }}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setMode(item);
-                  }}
+                  onPress={() => setMode(item)}
                   style={[styles.segmentItem, mode === item && styles.segmentActive]}
                 >
                   <Text style={[styles.segmentText, mode === item && styles.selectedText]}>
@@ -312,45 +327,34 @@ function Main() {
                 </Pressable>
               </View>
               <View style={styles.timeRow}>
-                <Text style={styles.secondary}>
-                  End at<Text style={styles.timeNote}>{'\n'}24-hour time</Text>
-                </Text>
-                <TextInput
-                  accessibilityLabel="End hour, 0 to 23"
-                  value={endHour}
-                  onChangeText={setEndHour}
-                  onBlur={() => setEndHour(endHour.padStart(2, '0'))}
-                  keyboardType="number-pad"
-                  maxLength={2}
-                  selectTextOnFocus
-                  style={styles.timeInput}
-                />
-                <Text style={styles.stepText}>:</Text>
-                <TextInput
-                  accessibilityLabel="End minute, 0 to 59"
-                  value={endMinute}
-                  onChangeText={setEndMinute}
-                  onBlur={() => setEndMinute(endMinute.padStart(2, '0'))}
-                  keyboardType="number-pad"
-                  maxLength={2}
-                  selectTextOnFocus
-                  style={styles.timeInput}
-                />
+                <Text style={styles.secondary}>End at</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`End time, ${formatEndTime(targetEnd, now)}`}
+                  accessibilityHint="Opens the end time picker"
+                  onPress={openEndTime}
+                  style={({ pressed }) => [styles.timeButton, pressed && styles.pressed]}
+                >
+                  <Text style={[styles.timeButtonText, !validTime && styles.timeButtonInvalid]}>
+                    {`${formatDay(targetEnd, now)} · ${formatClock(targetEnd)}`}
+                  </Text>
+                  <Text style={styles.chevron}>▾</Text>
+                </Pressable>
               </View>
             </PanelCarousel>
           </Animated.View>
-          <View style={styles.endSummary}>
+          <Animated.View
+            style={[styles.endSummary, summaryStyle]}
+            accessibilityElementsHidden={hideSummary}
+            importantForAccessibility={hideSummary ? 'no-hide-descendants' : 'auto'}
+          >
             <Text style={styles.secondary}>
               {reached ? 'Past target by' : running ? 'Target ends' : 'Planned finish'}
             </Text>
             <Text style={styles.endValue}>
-              {!running && mode === 'end' && !validTime
-                ? 'Enter a valid time'
-                : reached
-                ? formatDurationShort(now - endsAt)
-                : formatEndTime(endsAt, now)}
+              {reached ? formatDurationShort(now - endsAt) : formatEndTime(endsAt, now)}
             </Text>
-          </View>
+          </Animated.View>
           <HoldButton
             running={running}
             disabled={!ready || (!running && mode === 'end' && !validTime)}
@@ -364,6 +368,7 @@ function Main() {
         </Animated.View>
       </View>
 
+      <EndTimeSheet visible={openPanel === 'endTime'} now={now} value={endTime} onClose={closeEndTime} />
       <SlidePanel visible={openPanel === 'history'} onClose={closePanel} scrollable={false} widthRatio={1}>
         {historyPanel}
       </SlidePanel>
@@ -421,17 +426,19 @@ const styles = StyleSheet.create({
   presetText: { color: colors.textSecondary, fontSize: 14, fontVariant: ['tabular-nums'] },
   orange: { color: colors.accent },
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  timeInput: {
-    backgroundColor: colors.surface,
-    color: colors.textPrimary,
-    textAlign: 'center',
-    fontSize: 24,
-    borderRadius: 10,
-    width: 62,
+  timeButton: {
     height: MODE_PANEL_HEIGHT,
-    padding: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
   },
-  timeNote: { fontSize: 10, color: colors.textSecondary },
+  pressed: { opacity: 0.6 },
+  timeButtonText: { color: colors.textPrimary, fontSize: 17, fontVariant: ['tabular-nums'] },
+  timeButtonInvalid: { color: colors.textSecondary },
+  chevron: { color: colors.textSecondary, fontSize: 12 },
   secondary: { color: colors.textSecondary, fontSize: 12, flex: 1 },
   endSummary: {
     flexDirection: 'row',

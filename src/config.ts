@@ -27,6 +27,10 @@ export const DEFAULT_RING_CONFIG: RingConfig = {
 };
 
 export const DEFAULT_TARGET_HOURS = 16;
+/** End time mode starts at the next occurrence of this hour. */
+export const DEFAULT_END_HOUR = 8;
+/** Granularity of the End time minute wheel. */
+export const MINUTE_STEP = 5;
 /** Upper bound for the fasting ring so it doesn't balloon on tablets. */
 export const RING_MAX_SIZE = 420;
 /** Shared length of mode-switch transitions (panel slide, dial dot, milestone icons). */
