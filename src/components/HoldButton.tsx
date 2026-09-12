@@ -2,7 +2,7 @@ import { AccessibilityInfo, Animated, AppState, Pressable, StyleSheet, Text, Vie
 import React, { useEffect, useRef, useState } from 'react';
 import { appFont, colors } from '../theme';
 
-const HOLD_MS = 1200;
+const HOLD_MS = 1000;
 
 /** A separate, cancellable confirmation control, away from the adjustment dial. */
 export default function HoldButton({
@@ -81,7 +81,7 @@ export default function HoldButton({
       />
       <View pointerEvents="none" style={styles.content}>
         <Text style={[styles.label, running && styles.light]}>
-          {pressing ? 'Keep holding…' : running ? 'Hold to end fast' : 'Hold to start fast'}
+          {pressing ? 'Keep holding…' : running ? 'Hold to end' : 'Hold to start'}
         </Text>
       </View>
     </Pressable>

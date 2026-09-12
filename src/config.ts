@@ -27,4 +27,6 @@ export const DEFAULT_RING_CONFIG: RingConfig = {
 };
 
 export const DEFAULT_TARGET_HOURS = 16;
+/** Upper bound for the fasting ring so it doesn't balloon on tablets. */
+export const RING_MAX_SIZE = 420;
 export const BUY_ME_A_COFFEE_URL = 'https://buymeacoffee.com/rootlevelit';

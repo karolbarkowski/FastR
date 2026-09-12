@@ -8,11 +8,10 @@ export type FooterProps = {
   onHistoryClick: () => void;
   onLegendClick: () => void;
   onBuyMeCoffeeClick: () => void;
-  vertical?: boolean;
 };
 function Footer(props: FooterProps) {
   return (
-    <View style={[styles.footer, props.vertical && styles.vertical]}>
+    <View style={styles.footer}>
       {[
         { label: 'History', Icon: History, action: props.onHistoryClick },
         { label: 'Fasting guide', Icon: Legend, action: props.onLegendClick },
@@ -40,7 +39,6 @@ const styles = StyleSheet.create({
     borderTopColor: colors.outline,
     paddingTop: 12,
   },
-  vertical: { flexDirection: 'column' },
   item: { minHeight: 48, alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 12 },
   pressed: { opacity: 0.5 },
   label: { color: colors.textSecondary, fontSize: 10 },
