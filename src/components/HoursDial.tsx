@@ -19,7 +19,7 @@ const MIN = 1;
 const MAX = 99;
 const DEGREES_PER_HOUR = 30; // a full 360° turn = 12 hours, like a clock
 
-const DOT_SIZE = 12;
+const DOT_SIZE = 20;
 const DOT_TOP = 8; // distance from the disc's top edge to the dot
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -73,6 +73,7 @@ function HoursDial({ value, onChange, size = 132, disabled = false }: Props) {
       onStartShouldSetPanResponder: () => !disabledRef.current,
       onMoveShouldSetPanResponder: () => !disabledRef.current,
       onPanResponderGrant: (_e, g) => {
+        measureCenter(containerRef.current);
         draggingRef.current = true;
         drag.current.lastAngle = angleOf(g.x0, g.y0);
         drag.current.hours = valueRef.current;
@@ -125,6 +126,23 @@ function HoursDial({ value, onChange, size = 132, disabled = false }: Props) {
 
   return (
     <Animated.View
+      accessible={!disabled}
+      accessibilityRole="adjustable"
+      accessibilityLabel="Fasting duration"
+      accessibilityHint="Rotate to adjust, or use the hour buttons below."
+      accessibilityValue={{ min: MIN, max: MAX, now: value, text: `${value} hours` }}
+      accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+      onAccessibilityAction={event => {
+        if (disabled) {
+          return;
+        }
+        if (event.nativeEvent.actionName === 'increment') {
+          onChange(clamp(value + 1, MIN, MAX));
+        }
+        if (event.nativeEvent.actionName === 'decrement') {
+          onChange(clamp(value - 1, MIN, MAX));
+        }
+      }}
       ref={(r: View | null) => {
         containerRef.current = r;
       }}
@@ -156,6 +174,6 @@ const styles = StyleSheet.create({
     width: DOT_SIZE,
     height: DOT_SIZE,
     borderRadius: DOT_SIZE / 2,
-    backgroundColor: colors.textSecondary,
+    backgroundColor: colors.accent,
   },
 });

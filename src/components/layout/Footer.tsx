@@ -1,56 +1,47 @@
-import { StyleSheet, View } from 'react-native';
-
 import React from 'react';
-
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Coffee from '../../../assets/icons/coffee.svg';
 import History from '../../../assets/icons/history.svg';
 import Legend from '../../../assets/icons/legend.svg';
-import SoftButton from '../SoftButton';
 import { colors } from '../../theme';
-
 export type FooterProps = {
   onHistoryClick: () => void;
   onLegendClick: () => void;
   onBuyMeCoffeeClick: () => void;
-  /** Stack the buttons in a column — for the landscape side rail. */
   vertical?: boolean;
 };
-
-const BUTTON_SIZE = 36;
-
 function Footer(props: FooterProps) {
   return (
-    <View style={[styles.footer, props.vertical && styles.footerVertical]}>
-      <SoftButton onPress={props.onBuyMeCoffeeClick}>
-        <Coffee style={styles.icon} width={BUTTON_SIZE} height={BUTTON_SIZE} />
-      </SoftButton>
-
-      <SoftButton onPress={props.onHistoryClick}>
-        <History style={styles.icon} width={BUTTON_SIZE} height={BUTTON_SIZE} />
-      </SoftButton>
-
-      <SoftButton onPress={props.onLegendClick}>
-        <Legend style={styles.icon} width={BUTTON_SIZE} height={BUTTON_SIZE} />
-      </SoftButton>
+    <View style={[styles.footer, props.vertical && styles.vertical]}>
+      {[
+        { label: 'History', Icon: History, action: props.onHistoryClick },
+        { label: 'Fasting guide', Icon: Legend, action: props.onLegendClick },
+        { label: 'Support', Icon: Coffee, action: props.onBuyMeCoffeeClick },
+      ].map(({ label, Icon, action }) => (
+        <Pressable
+          key={label}
+          accessibilityRole="button"
+          onPress={action}
+          style={({ pressed }) => [styles.item, pressed && styles.pressed]}
+        >
+          <Icon width={21} height={21} color={colors.textSecondary} />
+          <Text style={styles.label}>{label}</Text>
+        </Pressable>
+      ))}
     </View>
   );
 }
-
 export default React.memo(Footer);
-
 const styles = StyleSheet.create({
   footer: {
-    width: '80%',
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-around',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.outline,
+    paddingTop: 12,
   },
-  footerVertical: {
-    width: 'auto',
-    flexDirection: 'column',
-    gap: 28,
-  },
-  icon: {
-    margin: 14,
-    color: colors.textPrimary,
-  },
+  vertical: { flexDirection: 'column' },
+  item: { minHeight: 48, alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 12 },
+  pressed: { opacity: 0.5 },
+  label: { color: colors.textSecondary, fontSize: 10 },
 });

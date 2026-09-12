@@ -1,134 +1,33 @@
-import Animated, {
-  Easing,
-  FadeInDown,
-  LinearTransition,
-  SlideOutRight,
-  useAnimatedStyle,
-  useSharedValue,
-  withDelay,
-  withTiming,
-} from 'react-native-reanimated';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import React, { useCallback, useEffect, useState } from 'react';
-import { formatDateShort, formatDurationShort } from '../../utils/format';
-
+import React, { useEffect, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Line, Rect } from 'react-native-svg';
 import { FastEntry } from '../../types';
 import { HISTORY_LIMIT, HOUR_MS } from '../../config';
-import HistoryIcon from '../../../assets/icons/history.svg';
+import { formatDateShort, formatDurationShort } from '../../utils/format';
+import { formatClock } from '../../utils/time';
 import { appFont, colors } from '../../theme';
 
-// Stagger the first few rows as the panel opens; later rows (below the fold)
-// appear together so long histories don't take seconds to settle.
-const STAGGER_MS = 40;
-const STAGGER_LIMIT = 8;
-
-// Selection indent / accent-bar width the row animates toward.
-const SELECT_PAD = 14;
-const SELECT_BORDER = 3;
-
-interface BarProps {
-  /** Bar length as a fraction of the longest fast on record. */
-  frac: number;
-  /** Whether the fast reached its target duration. */
-  metTarget: boolean;
-  /** Row index, used to stagger the grow-in. */
-  index: number;
-}
-
-/** A horizontal duration bar that grows from zero when the panel opens. */
-function HistoryBar({ frac, metTarget, index }: BarProps) {
-  const grow = useSharedValue(0);
-
-  useEffect(() => {
-    grow.value = withDelay(
-      120 + Math.min(index, STAGGER_LIMIT) * STAGGER_MS,
-      withTiming(Math.max(frac, 0.04), { duration: 450, easing: Easing.out(Easing.cubic) }),
-    );
-  }, [frac, grow, index]);
-
-  const growStyle = useAnimatedStyle(() => ({ width: `${grow.value * 100}%` }));
-
-  return (
-    <View style={styles.barTrack}>
-      <Animated.View style={[styles.barFill, !metTarget && styles.barFillShort, growStyle]} />
-    </View>
-  );
-}
-
-interface RowProps {
-  entry: FastEntry;
-  index: number;
-  frac: number;
-  metTarget: boolean;
-  selected: boolean;
-  onToggle: (id: string) => void;
-}
-
-/**
- * One fast: duration leads, an ember dot marks a met target, the bar below
- * scales against the longest fast. Selecting eases the row rightward behind
- * a growing accent bar; deletion slides it off to the right while the
- * remaining rows close the gap (layout transition).
- */
-function HistoryRow({ entry, index, frac, metTarget, selected, onToggle }: RowProps) {
-  const sel = useSharedValue(selected ? 1 : 0);
-
-  useEffect(() => {
-    sel.value = withTiming(selected ? 1 : 0, { duration: 180, easing: Easing.out(Easing.quad) });
-  }, [selected, sel]);
-
-  const selectStyle = useAnimatedStyle(() => ({
-    paddingLeft: SELECT_PAD * sel.value,
-    borderLeftWidth: SELECT_BORDER * sel.value,
-  }));
-
-  return (
-    <Animated.View
-      entering={FadeInDown.duration(220).delay(Math.min(index, STAGGER_LIMIT) * STAGGER_MS)}
-      exiting={SlideOutRight.duration(240)}
-      layout={LinearTransition.duration(240)}
-    >
-      <Pressable onPress={() => onToggle(entry.id)}>
-        <Animated.View style={[styles.row, selectStyle]}>
-          <View style={styles.rowHeader}>
-            <Text style={styles.duration}>{formatDurationShort(entry.endedAt - entry.startedAt)}</Text>
-            {metTarget && <View style={styles.metDot} />}
-            <Text style={styles.date}>{formatDateShort(entry.startedAt)}</Text>
-          </View>
-          <HistoryBar frac={frac} metTarget={metTarget} index={index} />
-        </Animated.View>
-      </Pressable>
-    </Animated.View>
-  );
-}
-
-interface Props {
+export default function HistoryList({
+  entries,
+  onDelete,
+}: {
   entries: FastEntry[];
-  /** Permanently remove the given entries from storage. */
   onDelete: (ids: string[]) => void;
-}
-
-/**
- * Fasting history: a pinned retention note above a scrolling list of rows,
- * with the "remove selected" action pinned below the list.
- */
-export default function HistoryList({ entries, onDelete }: Props) {
-  const maxMs = entries.reduce((m, e) => Math.max(m, e.endedAt - e.startedAt), 0);
-
+}) {
+  const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  // Drop selections for rows that no longer exist (e.g. after a delete).
   useEffect(() => {
-    setSelected(prev => {
-      const ids = new Set(entries.map(e => e.id));
-      const next = new Set([...prev].filter(id => ids.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
+    setSelected(previous => new Set([...previous].filter(id => entries.some(entry => entry.id === id))));
   }, [entries]);
-
-  const toggle = useCallback((id: string) => {
-    setSelected(prev => {
-      const next = new Set(prev);
+  const duration = (entry: FastEntry) => Math.max(0, entry.endedAt - entry.startedAt);
+  const total = entries.reduce((sum, entry) => sum + duration(entry), 0);
+  const met = entries.filter(entry => duration(entry) >= entry.targetHours * HOUR_MS).length;
+  const chartEntries = [...entries].reverse();
+  const maxHours = Math.max(4, Math.ceil(Math.max(...entries.map(entry => duration(entry) / HOUR_MS), 0) / 4) * 4);
+  const step = 280 / Math.max(chartEntries.length, 1);
+  const toggle = (id: string) =>
+    setSelected(previous => {
+      const next = new Set(previous);
       if (next.has(id)) {
         next.delete(id);
       } else {
@@ -136,171 +35,264 @@ export default function HistoryList({ entries, onDelete }: Props) {
       }
       return next;
     });
-  }, []);
-
-  const removeSelected = useCallback(() => {
-    onDelete([...selected]);
-    setSelected(new Set());
-  }, [onDelete, selected]);
-
-  if (entries.length === 0) {
-    return (
-      <View style={styles.empty}>
-        <HistoryIcon width={44} height={44} style={styles.emptyIcon} />
-        <Text style={styles.emptyTitle}>No fasts yet</Text>
-        <Text style={styles.emptyHint}>Completed fasts will show up here.</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.container}>
-      {/* Pinned header — just the retention note; stats over a rolling
-          30-fast window would be misleading. */}
-      <View style={styles.header}>
-        <Text style={styles.note}>Only the last {HISTORY_LIMIT} fasts are kept.</Text>
-      </View>
-
-      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {entries.map((entry, i) => {
-          const actualMs = entry.endedAt - entry.startedAt;
-          return (
-            <HistoryRow
-              key={entry.id}
-              entry={entry}
-              index={i}
-              frac={maxMs > 0 ? actualMs / maxMs : 0}
-              metTarget={actualMs >= entry.targetHours * HOUR_MS}
-              selected={selected.has(entry.id)}
-              onToggle={toggle}
-            />
-          );
-        })}
-      </ScrollView>
-
-      {/* Pinned below the list so it never scrolls out of reach. */}
-      {selected.size > 0 && (
-        <Animated.View entering={FadeInDown.duration(160)} style={styles.removeRow}>
-          <Pressable onPress={removeSelected} hitSlop={8}>
-            <Text style={styles.removeText}>remove {selected.size} selected</Text>
+      <View style={styles.heading}>
+        <View>
+          <Text style={styles.kicker}>YOUR FASTING JOURNAL</Text>
+          <Text style={styles.title}>History</Text>
+        </View>
+        {entries.length > 0 && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              setEditing(!editing);
+              setSelected(new Set());
+            }}
+            style={styles.edit}
+          >
+            <Text style={styles.link}>{editing ? 'Done' : 'Select'}</Text>
           </Pressable>
-        </Animated.View>
+        )}
+      </View>
+      {entries.length === 0 ? (
+        <View style={styles.empty}>
+          <View style={styles.emptyChart}>
+            {[28, 46, 37, 64, 52, 78, 62].map((barHeight, index) => (
+              <View key={index} style={[styles.emptyBar, { height: barHeight }]} />
+            ))}
+          </View>
+          <Text style={styles.emptyTitle}>A little time adds up.</Text>
+          <Text style={styles.emptyText}>
+            Your completed fasts will appear here, with a clear view of the time you’ve taken.
+          </Text>
+          <Text style={styles.retention}>Stored only on this device.</Text>
+        </View>
+      ) : (
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+          <View style={styles.stats}>
+            <View style={styles.stat}>
+              <Text style={styles.statNumber}>{entries.length}</Text>
+              <Text style={styles.small}>Fasts saved</Text>
+            </View>
+            <View style={styles.stat}>
+              <Text style={styles.statNumber}>{formatDurationShort(total / entries.length)}</Text>
+              <Text style={styles.small}>Average duration</Text>
+            </View>
+            <View style={styles.stat}>
+              <Text style={styles.statNumber}>
+                {met}
+                <Text style={styles.statSuffix}>/{entries.length}</Text>
+              </Text>
+              <Text style={styles.small}>Targets met</Text>
+            </View>
+          </View>
+          <View
+            style={styles.chartCard}
+            accessible
+            accessibilityLabel={`Duration chart, oldest to newest. ${
+              entries.length
+            } fasts. Longest duration ${formatDurationShort(
+              Math.max(...entries.map(duration)),
+            )}. Orange bars indicate targets met.`}
+          >
+            <View style={styles.chartHeading}>
+              <Text style={styles.chartTitle}>Time, over time</Text>
+              <Text style={styles.small}>Hours per fast</Text>
+            </View>
+            <View style={styles.chartArea}>
+              <View style={styles.axis}>
+                <Text style={styles.axisText}>{maxHours}h</Text>
+                <Text style={styles.axisText}>{maxHours / 2}h</Text>
+                <Text style={styles.axisText}>0</Text>
+              </View>
+              <Svg style={styles.chart} height={120} viewBox="0 0 280 120" preserveAspectRatio="none">
+                {[4, 60, 116].map(y => (
+                  <Line
+                    key={y}
+                    x1={0}
+                    x2={280}
+                    y1={y}
+                    y2={y}
+                    stroke={colors.outline}
+                    strokeWidth={0.5}
+                    strokeDasharray="3 4"
+                  />
+                ))}
+                {chartEntries.map((entry, index) => {
+                  const barHeight = Math.max(2, (duration(entry) / HOUR_MS / maxHours) * 112);
+                  const barWidth = Math.min(20, step * 0.6);
+                  return (
+                    <Rect
+                      key={entry.id}
+                      x={index * step + (step - barWidth) / 2}
+                      y={116 - barHeight}
+                      width={barWidth}
+                      height={barHeight}
+                      rx={Math.min(3, barWidth / 2)}
+                      fill={duration(entry) >= entry.targetHours * HOUR_MS ? colors.accent : '#89817B'}
+                    />
+                  );
+                })}
+              </Svg>
+            </View>
+            <View style={styles.chartDates}>
+              <Text style={styles.small}>{formatDateShort(chartEntries[0].startedAt)}</Text>
+              <Text style={styles.small}>
+                {entries.length > 1 ? formatDateShort(entries[0].startedAt) : 'Latest fast'}
+              </Text>
+            </View>
+            <View style={styles.legend}>
+              <View style={styles.dot} />
+              <Text style={styles.small}>Target met</Text>
+              <View style={[styles.dot, styles.mutedDot]} />
+              <Text style={styles.small}>Ended earlier</Text>
+            </View>
+          </View>
+          <View style={styles.listHeading}>
+            <Text style={styles.chartTitle}>Recent fasts</Text>
+            <Text style={styles.small}>Newest first</Text>
+          </View>
+          {entries.map(entry => {
+            const actual = duration(entry);
+            const targetMet = actual >= entry.targetHours * HOUR_MS;
+            return (
+              <Pressable
+                key={entry.id}
+                disabled={!editing}
+                accessibilityRole={editing ? 'checkbox' : undefined}
+                accessibilityState={editing ? { checked: selected.has(entry.id) } : undefined}
+                onPress={() => toggle(entry.id)}
+                style={[styles.row, selected.has(entry.id) && styles.selected]}
+              >
+                {editing && (
+                  <View style={[styles.checkbox, selected.has(entry.id) && styles.checked]}>
+                    <Text style={styles.check}>{selected.has(entry.id) ? '✓' : ''}</Text>
+                  </View>
+                )}
+                <View style={styles.rowMain}>
+                  <Text style={styles.date}>
+                    {formatDateShort(entry.startedAt)}
+                    <Text style={styles.year}> · {new Date(entry.startedAt).getFullYear()}</Text>
+                  </Text>
+                  <Text style={styles.small}>
+                    {formatClock(entry.startedAt)} →{' '}
+                    {formatDateShort(entry.startedAt) !== formatDateShort(entry.endedAt)
+                      ? `${formatDateShort(entry.endedAt)}, `
+                      : ''}
+                    {formatClock(entry.endedAt)}
+                  </Text>
+                  <Text style={[styles.status, targetMet && styles.orange]}>
+                    {targetMet ? 'Target met' : 'Ended earlier'} · {formatDurationShort(entry.targetHours * HOUR_MS)}{' '}
+                    goal
+                  </Text>
+                </View>
+                <Text style={styles.duration}>{formatDurationShort(actual)}</Text>
+              </Pressable>
+            );
+          })}
+          <Text style={styles.retention}>Your last {HISTORY_LIMIT} fasts. Stored only on this device.</Text>
+        </ScrollView>
+      )}
+      {editing && selected.size > 0 && (
+        <Pressable
+          accessibilityRole="button"
+          style={styles.delete}
+          onPress={() =>
+            Alert.alert(
+              `Delete ${selected.size} ${selected.size === 1 ? 'fast' : 'fasts'}?`,
+              'These entries will be permanently removed from this device.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: () => {
+                    onDelete([...selected]);
+                    setSelected(new Set());
+                    setEditing(false);
+                  },
+                },
+              ],
+            )
+          }
+        >
+          <Text style={styles.deleteText}>Delete {selected.size} selected</Text>
+        </Pressable>
       )}
     </View>
   );
 }
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignSelf: 'stretch',
-  },
-
-  // Empty state
-  empty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: 40,
-  },
-  emptyIcon: {
-    color: colors.textSecondary,
-    opacity: 0.5,
-    marginBottom: 14,
-  },
-  emptyTitle: {
-    fontFamily: appFont,
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  emptyHint: {
-    fontFamily: appFont,
-    color: colors.textSecondary,
-    fontSize: 13,
-    marginTop: 4,
-  },
-
-  // Pinned header
-  header: {
-    paddingBottom: 12,
-    marginBottom: 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.14)',
-  },
-  note: {
-    fontFamily: appFont,
-    color: colors.textSecondary,
-    opacity: 0.7,
-    fontSize: 11,
-    letterSpacing: 0.3,
-    textAlign: 'center',
-  },
-
-  // Rows
-  list: {
-    flex: 1,
-  },
+  container: { flex: 1 },
+  heading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  kicker: { color: colors.textSecondary, fontSize: 9, letterSpacing: 1.8, marginBottom: 8 },
+  title: { fontFamily: appFont, color: colors.textPrimary, fontSize: 34, fontWeight: '500', letterSpacing: -1 },
+  edit: { padding: 12 },
+  link: { color: colors.accent, fontSize: 13 },
+  scroll: { paddingBottom: 16 },
+  stats: { flexDirection: 'row', marginBottom: 26, gap: 8 },
+  stat: { flex: 1, gap: 6 },
+  statNumber: { color: colors.textPrimary, fontSize: 21, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  statSuffix: { color: colors.textSecondary, fontSize: 14 },
+  small: { color: colors.textSecondary, fontSize: 10, lineHeight: 16 },
+  chartCard: { padding: 16, backgroundColor: colors.bg, borderRadius: 18, marginBottom: 28 },
+  chartHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  chartTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: '500' },
+  chartArea: { flexDirection: 'row', gap: 8 },
+  axis: { justifyContent: 'space-between', width: 26, paddingBottom: 2 },
+  axisText: { color: colors.textSecondary, fontSize: 9 },
+  chart: { flex: 1 },
+  chartDates: { flexDirection: 'row', justifyContent: 'space-between', marginLeft: 34, marginTop: 6 },
+  legend: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16 },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent },
+  mutedDot: { backgroundColor: '#89817B', marginLeft: 10 },
+  listHeading: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   row: {
-    paddingVertical: 10,
-    // Width/padding are animated from 0 on selection; only the color is static.
-    borderLeftColor: colors.accent,
-  },
-  rowHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 7,
+    gap: 10,
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.outline,
   },
+  rowMain: { flex: 1, gap: 4 },
+  date: { color: colors.textPrimary, fontSize: 14, fontWeight: '500' },
+  year: { color: colors.textSecondary, fontSize: 11, fontWeight: '400' },
+  status: { color: colors.textSecondary, fontSize: 10 },
+  orange: { color: colors.accent },
   duration: {
-    fontFamily: appFont,
     color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 20,
+    fontWeight: '400',
     fontVariant: ['tabular-nums'],
+    letterSpacing: -0.5,
   },
-  // Small ember dot marking fasts that reached their target.
-  metDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.accent,
-    marginLeft: 8,
-  },
-  date: {
-    fontFamily: appFont,
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontVariant: ['tabular-nums'],
-    marginLeft: 'auto',
-  },
-  barTrack: {
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: '100%',
-    borderRadius: 2.5,
-    backgroundColor: colors.accent,
-  },
-  // Fasts that ended before reaching their target render muted.
-  barFillShort: {
-    backgroundColor: 'rgba(255,255,255,0.30)',
-  },
-
-  removeRow: {
-    paddingTop: 14,
+  selected: { backgroundColor: colors.accentSoft },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.textSecondary,
     alignItems: 'center',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.14)',
+    justifyContent: 'center',
   },
-  removeText: {
-    fontFamily: appFont,
-    color: colors.danger,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    paddingVertical: 6,
+  checked: { backgroundColor: colors.accent, borderColor: colors.accent },
+  check: { color: colors.bg, fontSize: 12 },
+  delete: { backgroundColor: colors.accentSoft, padding: 16, alignItems: 'center', borderRadius: 12 },
+  deleteText: { color: colors.danger, fontWeight: '500' },
+  retention: { color: colors.textSecondary, fontSize: 10, textAlign: 'center', lineHeight: 16, marginTop: 24 },
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 50 },
+  emptyChart: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: 90, marginBottom: 28 },
+  emptyBar: { width: 18, borderRadius: 4, backgroundColor: colors.outline },
+  emptyTitle: { color: colors.textPrimary, fontSize: 23, letterSpacing: -0.5 },
+  emptyText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: 12,
+    maxWidth: 260,
   },
 });

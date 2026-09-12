@@ -1,302 +1,304 @@
 import { ActiveFast, FastEntry } from './src/types';
-import Animated, {
-  FadeIn,
-  FadeOut,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  withTiming,
-} from 'react-native-reanimated';
+import {
+  AppState,
+  Pressable,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { DEFAULT_RING_CONFIG, DEFAULT_TARGET_HOURS, HISTORY_LIMIT, HOUR_MS } from './src/config';
-import { Pressable, StatusBar, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { appFont, colors } from './src/theme';
 import { clearActiveFast, loadActiveFast, loadHistory, saveActiveFast, saveHistory } from './src/utils/storage';
+import { formatDurationShort, formatElapsed } from './src/utils/format';
+import { formatEndTime, nextEndTime } from './src/utils/time';
 
-import CelebrationOverlay from './src/components/CelebrationOverlay';
 import Coffee from './src/components/side-panels/Coffee';
-import DigitalNumber from './src/components/DigitalNumber';
 import FastingRing from './src/components/FastingRing';
 import Footer from './src/components/layout/Footer';
 import HistoryList from './src/components/side-panels/HistoryList';
+import HoldButton from './src/components/HoldButton';
 import HoursDial from './src/components/HoursDial';
 import Legend from './src/components/side-panels/Legend';
 import Logo from './src/components/layout/Logo';
 import SlidePanel from './src/components/SlidePanel';
-import { appFont, colors } from './src/theme';
-import { formatElapsed } from './src/utils/format';
-import { scheduleOnRN } from 'react-native-worklets';
 
 type PanelKey = 'history' | 'legend' | 'coffee';
-
-// Ending a fast requires holding the center button this long while a radial
-// fill confirms the intent — no native popup, no accidental taps.
-const HOLD_TO_END_MS = 1200;
-
 function Main() {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const isLandscape = width > height;
-  // Portrait sizes the ring by width; landscape by the (shorter) height.
-  const ringSize = isLandscape
-    ? Math.min(height - insets.top - insets.bottom - 24, width * 0.5, 380)
-    : Math.min(width - 40, height * 0.48, 380);
-  const buttonSize = Math.round(ringSize * 0.7);
-  // The tappable start/stop circle is deliberately smaller than the dial, so
-  // grabbing the knob's rim to set hours can't accidentally trigger it.
-  const centerSize = Math.round(buttonSize * 0.66);
-
+  const landscape = width > height;
+  const ringSize = Math.min(width - 48, landscape ? 240 : height * 0.39, 340);
   const [targetHours, setTargetHours] = useState(DEFAULT_TARGET_HOURS);
+  const [mode, setMode] = useState<'duration' | 'end'>('duration');
+  const [endHour, setEndHour] = useState('08');
+  const [endMinute, setEndMinute] = useState('00');
   const [activeFast, setActiveFast] = useState<ActiveFast | null>(null);
   const [history, setHistory] = useState<FastEntry[]>([]);
+  const [ready, setReady] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [openPanel, setOpenPanel] = useState<PanelKey | null>(null);
-  // Bumped each time a fast ends to fire the celebration burst.
-  const [celebrateAt, setCelebrateAt] = useState(0);
-
-  // Restore persisted state on launch.
   useEffect(() => {
     (async () => {
       const [active, entries] = await Promise.all([loadActiveFast(), loadHistory()]);
       if (active) {
         setActiveFast(active);
-        setTargetHours(active.targetHours);
+        setTargetHours(Math.max(1, Math.min(99, Math.round(active.targetHours))));
       }
       setHistory(entries.slice(0, HISTORY_LIMIT));
+      setReady(true);
     })();
   }, []);
-
-  // Tick once per second while a fast is running.
   useEffect(() => {
-    if (!activeFast) {
-      return;
-    }
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [activeFast]);
-
-  const isRunning = activeFast !== null;
-  const elapsedMs = isRunning ? Math.max(0, now - activeFast.startedAt) : 0;
-  const elapsedHours = elapsedMs / HOUR_MS;
-  // While running the ring scale is locked to the fast that was started,
-  // so dial input can't rescale a fast in progress.
-  const ringHours = activeFast?.targetHours ?? targetHours;
-
-  // The drag dial spans its own 1–99 range, independent of the stepper bounds.
-  const setHoursFromDial = useCallback((h: number) => {
-    setTargetHours(Math.max(1, Math.min(99, h)));
-  }, []);
-
-  const startFast = useCallback(() => {
-    const fast: ActiveFast = { startedAt: Date.now(), targetHours };
-    setActiveFast(fast);
-    saveActiveFast(fast);
-  }, [targetHours]);
-
-  // Confirmation happens physically (the hold gesture below), so ending
-  // commits straight to history.
-  const endFast = useCallback(() => {
-    if (!activeFast) {
-      return;
-    }
-    const entry: FastEntry = {
-      id: String(Date.now()),
-      startedAt: activeFast.startedAt,
-      endedAt: Date.now(),
-      targetHours: activeFast.targetHours,
+    const id = setInterval(() => setNow(Date.now()), activeFast ? 1000 : 15000);
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        setNow(Date.now());
+      }
+    });
+    return () => {
+      clearInterval(id);
+      sub.remove();
     };
-    const next = [entry, ...history].slice(0, HISTORY_LIMIT);
-    setHistory(next);
-    setActiveFast(null);
-    setCelebrateAt(Date.now());
-    saveHistory(next);
-    clearActiveFast();
-  }, [activeFast, history]);
-
-  // Permanently drop the given history entries (from the history panel).
-  const deleteEntries = useCallback(
-    (ids: string[]) => {
-      const remove = new Set(ids);
-      const next = history.filter(e => !remove.has(e.id));
+  }, [activeFast]);
+  const validTime = /^\d{1,2}$/.test(endHour) && /^\d{1,2}$/.test(endMinute) && +endHour < 24 && +endMinute < 60;
+  const targetEnd = nextEndTime(now, +endHour || 0, +endMinute || 0);
+  const plannedHours = mode === 'end' ? (targetEnd - now) / HOUR_MS : targetHours;
+  const running = activeFast !== null;
+  const elapsedMs = activeFast ? Math.max(0, now - activeFast.startedAt) : 0;
+  const ringHours = activeFast?.targetHours ?? plannedHours;
+  const endsAt = activeFast
+    ? activeFast.startedAt + activeFast.targetHours * HOUR_MS
+    : mode === 'end'
+    ? targetEnd
+    : now + targetHours * HOUR_MS;
+  const reached = running && now >= endsAt;
+  const setHours = useCallback((hours: number) => setTargetHours(Math.max(1, Math.min(99, hours))), []);
+  const complete = () => {
+    if (activeFast) {
+      const entry: FastEntry = {
+        id: String(Date.now()),
+        startedAt: activeFast.startedAt,
+        endedAt: Date.now(),
+        targetHours: activeFast.targetHours,
+      };
+      const next = [entry, ...history].slice(0, HISTORY_LIMIT);
       setHistory(next);
+      setActiveFast(null);
       saveHistory(next);
-    },
-    [history],
-  );
-
-  // Stable handlers: new identities each render would defeat React.memo on
-  // Footer and the three SlidePanels, re-committing into them on every
-  // one-second clock tick (and mid-slide, which interrupts the animation).
+      clearActiveFast();
+    } else {
+      if (!ready || (mode === 'end' && !validTime)) {
+        return;
+      }
+      const startedAt = Date.now();
+      const fast = {
+        startedAt,
+        targetHours:
+          mode === 'end' ? (nextEndTime(startedAt, +endHour, +endMinute) - startedAt) / HOUR_MS : targetHours,
+      };
+      setNow(startedAt);
+      setActiveFast(fast);
+      saveActiveFast(fast);
+    }
+  };
+  const deleteEntries = useCallback((ids: string[]) => {
+    const remove = new Set(ids);
+    setHistory(previous => {
+      const next = previous.filter(entry => !remove.has(entry.id));
+      saveHistory(next);
+      return next;
+    });
+  }, []);
   const openCoffee = useCallback(() => setOpenPanel('coffee'), []);
   const openHistory = useCallback(() => setOpenPanel('history'), []);
   const openLegend = useCallback(() => setOpenPanel('legend'), []);
   const closePanel = useCallback(() => setOpenPanel(null), []);
-
-  // Each panel gets its own permanently-mounted SlidePanel below, so opening
-  // one only animates a transform — nothing mounts or swaps mid-slide. The
-  // memoized elements keep clock-tick re-renders from committing into them.
   const historyPanel = useMemo(
     () => <HistoryList entries={history} onDelete={deleteEntries} />,
     [history, deleteEntries],
   );
   const legendPanel = useMemo(() => <Legend />, []);
   const coffeePanel = useMemo(() => <Coffee />, []);
-
-  // Press-in feedback on the center button.
-  const centerScale = useSharedValue(1);
-  const centerStyle = useAnimatedStyle(() => ({ transform: [{ scale: centerScale.value }] }));
-
-  // Hold-to-end: a disc grows from the button's center while held; reaching
-  // full size ends the fast, releasing early rewinds it.
-  const holdProgress = useSharedValue(0);
-  const holdFillStyle = useAnimatedStyle(() => ({
-    opacity: holdProgress.value > 0.01 ? 0.22 : 0,
-    transform: [{ scale: holdProgress.value }],
-  }));
-
-  // After a completed hold ends the fast, the finger lift still fires
-  // onPress — without this guard it would instantly start a new fast.
-  const holdConsumedPress = useRef(false);
-
-  const completeHold = useCallback(() => {
-    holdConsumedPress.current = true;
-    endFast();
-  }, [endFast]);
-
-  const onCenterPressIn = useCallback(() => {
-    holdConsumedPress.current = false;
-    centerScale.value = withTiming(0.95, { duration: 90 });
-    if (isRunning) {
-      holdProgress.value = withTiming(1, { duration: HOLD_TO_END_MS }, finished => {
-        if (finished) {
-          holdProgress.value = 0;
-          scheduleOnRN(completeHold);
-        }
-      });
-    }
-  }, [isRunning, completeHold, centerScale, holdProgress]);
-
-  const onCenterPressOut = useCallback(() => {
-    centerScale.value = withSpring(1, { damping: 14, stiffness: 220 });
-    // Released early — rewind the fill. (No-op after a completed hold.)
-    holdProgress.value = withTiming(0, { duration: 160 });
-  }, [centerScale, holdProgress]);
-
-  const onCenterPress = useCallback(() => {
-    if (holdConsumedPress.current) {
-      holdConsumedPress.current = false;
-      return;
-    }
-    if (!isRunning) {
-      startFast();
-    }
-  }, [isRunning, startFast]);
-
   return (
     <View style={styles.screen}>
       <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
-      {(() => {
-        // The dial stack is orientation-independent; only the frame around
-        // it changes (column with header/footer vs. row with side rails).
-        const dialStack = (
-          <View style={styles.main}>
-            {/* All three layers share the same centered box, stacked back-to-front */}
-            <View style={styles.layer} pointerEvents="box-none">
+      <ScrollView
+        accessibilityElementsHidden={openPanel !== null}
+        importantForAccessibility={openPanel !== null ? 'no-hide-descendants' : 'auto'}
+        contentContainerStyle={[
+          styles.page,
+          landscape && styles.landscapePage,
+          {
+            paddingTop: insets.top + (landscape ? 8 : 20),
+            paddingBottom: insets.bottom + 16,
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={[styles.header, landscape && styles.hidden]}>
+          <Logo />
+          <Text style={styles.private}>YOUR TIME. YOUR PACE.</Text>
+        </View>
+        <View style={[styles.body, landscape && styles.landscape]}>
+          <View style={styles.instrument}>
+            <Text style={styles.eyebrow}>{running ? (reached ? 'TARGET REACHED' : 'FAST IN PROGRESS') : ''}</Text>
+            <View style={{ width: ringSize, height: ringSize }}>
               <FastingRing
                 size={ringSize}
                 totalHours={ringHours}
-                elapsedHours={elapsedHours}
+                elapsedHours={elapsedMs / HOUR_MS}
                 config={DEFAULT_RING_CONFIG}
               />
-            </View>
-
-            <View style={styles.layer} pointerEvents="box-none">
-              <HoursDial value={targetHours} size={buttonSize} onChange={setHoursFromDial} disabled={isRunning} />
-            </View>
-
-            <View style={styles.layer} pointerEvents="box-none">
-              <Pressable onPress={onCenterPress} onPressIn={onCenterPressIn} onPressOut={onCenterPressOut}>
-                <Animated.View
+              <View style={styles.layer}>
+                <HoursDial
+                  value={targetHours}
+                  size={ringSize * 0.73}
+                  onChange={setHours}
+                  disabled={running || mode === 'end'}
+                />
+              </View>
+              <View style={styles.layer} pointerEvents="none">
+                <Text style={styles.dialLabel}>{running ? 'Elapsed time' : 'Fasting duration'}</Text>
+                <Text
                   style={[
-                    styles.controlButtonWrapper,
-                    { width: centerSize, height: centerSize, borderRadius: centerSize / 2 },
-                    centerStyle,
+                    styles.number,
+                    landscape && styles.compactNumber,
+                    (running || mode === 'end') && styles.timer,
                   ]}
                 >
-                  {/* Radial fill that grows while the button is held to end a fast */}
-                  <Animated.View
-                    style={[styles.holdFill, { borderRadius: centerSize / 2 }, holdFillStyle]}
-                    pointerEvents="none"
-                  />
-
-                  {isRunning ? (
-                    <Animated.View
-                      key="running"
-                      style={styles.centerContent}
-                      entering={FadeIn.duration(220)}
-                      exiting={FadeOut.duration(120)}
-                    >
-                      <Text style={styles.elapsedLabel}>FASTING</Text>
-                      <Text style={styles.elapsedTime}>{formatElapsed(elapsedMs)}</Text>
-                      <Text style={styles.endHint}>hold to end</Text>
-                    </Animated.View>
-                  ) : (
-                    <Animated.View
-                      key="idle"
-                      style={styles.centerContent}
-                      entering={FadeIn.duration(220)}
-                      exiting={FadeOut.duration(120)}
-                    >
-                      <Text style={styles.controlButtonLabel}>HRS</Text>
-                      <DigitalNumber value={targetHours} width={70} height={50} />
-                      <Text style={styles.controlButtonLabel}>START</Text>
-                    </Animated.View>
-                  )}
-                </Animated.View>
-              </Pressable>
-            </View>
-          </View>
-        );
-
-        if (isLandscape) {
-          return (
-            <View
-              style={[
-                styles.rootLandscape,
-                {
-                  paddingTop: insets.top + 12,
-                  paddingBottom: insets.bottom + 12,
-                  paddingLeft: insets.left + 16,
-                  paddingRight: insets.right + 16,
-                },
-              ]}
-            >
-              <View style={styles.railLeft}>
-                <Logo compact />
-              </View>
-              {dialStack}
-              <View style={styles.railRight}>
-                <Footer vertical onBuyMeCoffeeClick={openCoffee} onHistoryClick={openHistory} onLegendClick={openLegend} />
+                  {running
+                    ? formatElapsed(elapsedMs)
+                    : mode === 'end'
+                    ? formatDurationShort(plannedHours * HOUR_MS)
+                    : targetHours}
+                </Text>
+                <Text style={styles.dialLabel}>
+                  {running
+                    ? `${formatDurationShort(ringHours * HOUR_MS)} target`
+                    : mode === 'end'
+                    ? 'until your end time'
+                    : 'hours'}
+                </Text>
               </View>
             </View>
-          );
-        }
-
-        return (
-          <View style={[styles.root, { paddingTop: insets.top + 60, paddingBottom: insets.bottom + 60 }]}>
-            <View style={styles.header}>
-              <Logo />
-            </View>
-            {dialStack}
-            <View style={styles.footer}>
-              <Footer onBuyMeCoffeeClick={openCoffee} onHistoryClick={openHistory} onLegendClick={openLegend} />
-            </View>
+            <Text style={styles.dialHint}>
+              {running
+                ? reached
+                  ? 'Your timer continues until you end it.'
+                  : 'A little time, just for you.'
+                : mode === 'duration'
+                ? '↻  Drag the orange handle to adjust'
+                : 'Choose when your fast will end'}
+            </Text>
           </View>
-        );
-      })()}
-
-      <SlidePanel visible={openPanel === 'history'} onClose={closePanel} scrollable={false}>
+          <View style={styles.controls}>
+            {!running && (
+              <>
+                <View style={styles.segment}>
+                  {(['duration', 'end'] as const).map(item => (
+                    <Pressable
+                      key={item}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: mode === item }}
+                      onPress={() => setMode(item)}
+                      style={[styles.segmentItem, mode === item && styles.segmentActive]}
+                    >
+                      <Text style={[styles.segmentText, mode === item && styles.selectedText]}>
+                        {item === 'duration' ? 'Duration' : 'End time'}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {mode === 'duration' ? (
+                  <View style={styles.presets}>
+                    <Pressable
+                      accessibilityLabel="Decrease duration by one hour"
+                      accessibilityRole="button"
+                      disabled={targetHours <= 1}
+                      onPress={() => setHours(targetHours - 1)}
+                      style={styles.step}
+                    >
+                      <Text style={styles.stepText}>−</Text>
+                    </Pressable>
+                    {[12, 16, 18, 24].map(hours => (
+                      <Pressable
+                        key={hours}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: targetHours === hours }}
+                        onPress={() => setHours(hours)}
+                        style={[styles.preset, targetHours === hours && styles.presetActive]}
+                      >
+                        <Text style={[styles.presetText, targetHours === hours && styles.orange]}>{hours}h</Text>
+                      </Pressable>
+                    ))}
+                    <Pressable
+                      accessibilityLabel="Increase duration by one hour"
+                      accessibilityRole="button"
+                      disabled={targetHours >= 99}
+                      onPress={() => setHours(targetHours + 1)}
+                      style={styles.step}
+                    >
+                      <Text style={styles.stepText}>+</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <View style={styles.timeRow}>
+                    <Text style={styles.secondary}>
+                      End at<Text style={styles.timeNote}>{'\n'}24-hour time</Text>
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="End hour, 0 to 23"
+                      value={endHour}
+                      onChangeText={setEndHour}
+                      onBlur={() => setEndHour(endHour.padStart(2, '0'))}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      selectTextOnFocus
+                      style={styles.timeInput}
+                    />
+                    <Text style={styles.stepText}>:</Text>
+                    <TextInput
+                      accessibilityLabel="End minute, 0 to 59"
+                      value={endMinute}
+                      onChangeText={setEndMinute}
+                      onBlur={() => setEndMinute(endMinute.padStart(2, '0'))}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      selectTextOnFocus
+                      style={styles.timeInput}
+                    />
+                  </View>
+                )}
+              </>
+            )}
+            <View style={styles.endSummary}>
+              <Text style={styles.secondary}>
+                {reached ? 'Past target by' : running ? 'Target ends' : 'Planned finish'}
+              </Text>
+              <Text style={styles.endValue}>
+                {!running && mode === 'end' && !validTime
+                  ? 'Enter a valid time'
+                  : reached
+                  ? formatDurationShort(now - endsAt)
+                  : formatEndTime(endsAt, now)}
+              </Text>
+            </View>
+            <HoldButton
+              running={running}
+              disabled={!ready || (!running && mode === 'end' && !validTime)}
+              onComplete={complete}
+            />
+          </View>
+        </View>
+        <Footer onBuyMeCoffeeClick={openCoffee} onHistoryClick={openHistory} onLegendClick={openLegend} />
+      </ScrollView>
+      <SlidePanel visible={openPanel === 'history'} onClose={closePanel} scrollable={false} widthRatio={1}>
         {historyPanel}
       </SlidePanel>
       <SlidePanel visible={openPanel === 'legend'} onClose={closePanel}>
@@ -305,12 +307,9 @@ function Main() {
       <SlidePanel visible={openPanel === 'coffee'} onClose={closePanel}>
         {coffeePanel}
       </SlidePanel>
-
-      <CelebrationOverlay trigger={celebrateAt} />
     </View>
   );
 }
-
 export default function App() {
   return (
     <SafeAreaProvider>
@@ -318,107 +317,64 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
-
 const styles = StyleSheet.create({
-  // Layout
-  screen: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  root: {
-    flex: 1,
-    justifyContent: 'space-between',
-    backgroundColor: colors.bg,
-    paddingHorizontal: 20,
-  },
-  // Landscape: side rails (logo left, actions right) flanking the dial.
-  // Equal rail widths keep the ring optically centered on the screen.
-  rootLandscape: {
-    flex: 1,
-    flexDirection: 'row',
-    backgroundColor: colors.bg,
-  },
-  railLeft: {
-    width: 88,
-    alignItems: 'center',
-    paddingTop: 8,
-  },
-  railRight: {
-    width: 88,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  header: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  main: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  footer: {
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 0,
-  },
-
-  // Each child sits in its own absolutely-filled, centered layer so they
-  // stack on top of one another instead of flowing in a column.
-  layer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  controlButtonWrapper: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.outline,
-    overflow: 'hidden',
-  },
-  centerContent: {
-    alignItems: 'center',
-    gap: 10,
-  },
-  holdFill: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: colors.accent,
-  },
-  controlButtonLabel: {
+  screen: { flex: 1, backgroundColor: colors.bg },
+  hidden: { display: 'none' },
+  page: { flexGrow: 1, paddingHorizontal: 24, gap: 22 },
+  landscapePage: { gap: 12 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  private: { color: colors.textSecondary, fontSize: 9, letterSpacing: 1.3 },
+  body: { flex: 1, justifyContent: 'center', gap: 24 },
+  landscape: { flexDirection: 'row', alignItems: 'center', gap: 32 },
+  instrument: { alignItems: 'center' },
+  eyebrow: { color: colors.textSecondary, fontSize: 10, letterSpacing: 2, marginBottom: 12 },
+  layer: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  dialLabel: { fontFamily: appFont, color: colors.textSecondary, fontSize: 12 },
+  number: {
     fontFamily: appFont,
-    fontSize: 14,
-    fontWeight: '800',
+    fontSize: 64,
+    fontWeight: '300',
+    letterSpacing: -2,
     color: colors.textPrimary,
-  },
-
-  elapsedLabel: {
-    fontFamily: appFont,
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 2,
-  },
-  elapsedTime: {
-    fontFamily: appFont,
-    color: colors.textPrimary,
-    fontSize: 20,
-    fontWeight: '800',
     fontVariant: ['tabular-nums'],
-    marginVertical: 2,
+    marginVertical: 3,
   },
-  endHint: {
-    fontFamily: appFont,
-    color: colors.textSecondary,
-    fontSize: 12,
+  timer: { fontSize: 30, letterSpacing: -0.8 },
+  compactNumber: { fontSize: 44 },
+  dialHint: { color: colors.textSecondary, fontSize: 12, marginTop: -12 },
+  controls: { width: '100%', maxWidth: 420, alignSelf: 'center', flexShrink: 1, gap: 12 },
+  segment: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: 12, padding: 4 },
+  segmentItem: { flex: 1, paddingVertical: 11, alignItems: 'center', borderRadius: 9 },
+  segmentActive: { backgroundColor: '#48433F' },
+  segmentText: { color: colors.textSecondary, fontSize: 13, fontWeight: '500' },
+  selectedText: { color: colors.textPrimary },
+  presets: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  step: { minWidth: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  stepText: { color: colors.textPrimary, fontSize: 24 },
+  preset: { flex: 1, height: 44, justifyContent: 'center', alignItems: 'center', borderRadius: 10 },
+  presetActive: { backgroundColor: colors.accentSoft },
+  presetText: { color: colors.textSecondary, fontSize: 14, fontVariant: ['tabular-nums'] },
+  orange: { color: colors.accent },
+  timeRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  timeInput: {
+    backgroundColor: colors.surface,
+    color: colors.textPrimary,
+    textAlign: 'center',
+    fontSize: 24,
+    borderRadius: 10,
+    width: 62,
+    height: 52,
+    padding: 4,
   },
+  timeNote: { fontSize: 10, color: colors.textSecondary },
+  secondary: { color: colors.textSecondary, fontSize: 12, flex: 1 },
+  endSummary: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    gap: 8,
+  },
+  endValue: { color: colors.textPrimary, fontSize: 13, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  localNote: { textAlign: 'center', color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
 });

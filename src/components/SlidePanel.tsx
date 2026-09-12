@@ -1,9 +1,8 @@
 import Animated, { Easing, interpolate, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import React, { ReactNode, useEffect } from 'react';
 
-import Close from '../../assets/icons/close.svg';
-import SoftButton from './SoftButton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../theme';
 
 interface Props {
@@ -21,7 +20,6 @@ interface Props {
 
 const OPEN_DURATION = 240;
 const CLOSE_DURATION = 160;
-const BUTTON_SIZE = 36;
 
 /**
  * A reusable overlay panel that slides in from the right edge. Tapping the
@@ -35,6 +33,17 @@ const BUTTON_SIZE = 36;
  */
 function SlidePanel({ visible, onClose, children, widthRatio = 0.82, scrollable = true }: Props) {
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [visible, onClose]);
   const panelWidth = Math.min(width * widthRatio, 420);
   // Landscape: slide in from the left, full height and square — the action
   // buttons live on the right rail there and must stay reachable.
@@ -64,23 +73,39 @@ function SlidePanel({ visible, onClose, children, widthRatio = 0.82, scrollable 
   }));
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents={visible ? 'box-none' : 'none'}>
+    <View
+      style={StyleSheet.absoluteFill}
+      pointerEvents={visible ? 'box-none' : 'none'}
+      accessibilityViewIsModal={visible}
+      accessibilityElementsHidden={!visible}
+      importantForAccessibility={visible ? 'yes' : 'no-hide-descendants'}
+    >
       {/* Backdrop — tap anywhere outside the panel to dismiss. */}
       <Animated.View style={[styles.backdrop, backdropStyle]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
       </Animated.View>
 
       <Animated.View
-        style={[styles.panel, isLandscape ? styles.panelLeft : styles.panelRight, { width: panelWidth }, panelStyle]}
+        style={[
+          styles.panel,
+          isLandscape ? styles.panelLeft : styles.panelRight,
+          { width: panelWidth, top: insets.top + 12, bottom: insets.bottom + 12 },
+          panelStyle,
+        ]}
       >
         <Animated.View style={[styles.content, contentStyle]}>
           {scrollable ? <ScrollView>{children}</ScrollView> : children}
         </Animated.View>
 
         <View style={styles.center}>
-          <SoftButton onPress={onClose}>
-            <Close style={styles.closeIcon} width={BUTTON_SIZE} height={BUTTON_SIZE} />
-          </SoftButton>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close panel"
+            onPress={onClose}
+            style={styles.closeButton}
+          >
+            <Text style={styles.closeText}>Close</Text>
+          </Pressable>
         </View>
       </Animated.View>
     </View>
@@ -122,10 +147,8 @@ const styles = StyleSheet.create({
     left: 0,
     borderLeftWidth: 0,
   },
-  closeIcon: {
-    margin: 14,
-    color: colors.textPrimary,
-  },
+  closeButton: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 32, marginTop: 8 },
+  closeText: { color: colors.textSecondary, fontSize: 13 },
   center: {
     alignItems: 'center',
   },
