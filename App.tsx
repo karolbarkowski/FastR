@@ -3,18 +3,20 @@ import { AppState, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from
 import Animated, {
   Easing,
   EntryExitAnimationFunction,
-  FadeIn,
   FadeInDown,
-  FadeInLeft,
-  FadeInRight,
-  FadeOut,
-  FadeOutLeft,
-  FadeOutRight,
-  LayoutAnimationConfig,
+  useAnimatedStyle,
+  useSharedValue,
   withDelay,
   withTiming,
 } from 'react-native-reanimated';
-import { DEFAULT_RING_CONFIG, DEFAULT_TARGET_HOURS, HISTORY_LIMIT, HOUR_MS, RING_MAX_SIZE } from './src/config';
+import {
+  DEFAULT_RING_CONFIG,
+  DEFAULT_TARGET_HOURS,
+  HISTORY_LIMIT,
+  HOUR_MS,
+  MODE_TRANSITION_MS,
+  RING_MAX_SIZE,
+} from './src/config';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { appFont, colors } from './src/theme';
@@ -24,6 +26,7 @@ import { formatEndTime, nextEndTime } from './src/utils/time';
 
 import Coffee from './src/components/side-panels/Coffee';
 import FastingRing from './src/components/FastingRing';
+import GaugeLabels from './src/components/GaugeLabels';
 import Footer from './src/components/layout/Footer';
 import HistoryList from './src/components/side-panels/HistoryList';
 import HoldButton from './src/components/HoldButton';
@@ -62,16 +65,6 @@ const ringEntry: EntryExitAnimationFunction = () => {
       transform: [{ scale: withDelay(delay, withTiming(1, config)) }],
     },
   };
-};
-
-// Center labels slide like the mode carousel: Duration lives on the left,
-// End time on the right. Starting/ending a fast just cross-fades.
-const LABEL_IN = 240;
-const LABEL_OUT = 180;
-const labelTransitions = {
-  duration: { entering: FadeInLeft.duration(LABEL_IN), exiting: FadeOutLeft.duration(LABEL_OUT) },
-  end: { entering: FadeInRight.duration(LABEL_IN), exiting: FadeOutRight.duration(LABEL_OUT) },
-  running: { entering: FadeIn.duration(LABEL_IN), exiting: FadeOut.duration(LABEL_OUT) },
 };
 
 function Main() {
@@ -123,7 +116,19 @@ function Main() {
     ? targetEnd
     : now + targetHours * HOUR_MS;
   const reached = running && now >= endsAt;
-  const labelKey = running ? 'running' : mode;
+  // While a fast runs the mode picker fades out but keeps its space, so the
+  // gauge above doesn't jump.
+  const modeSectionOpacity = useSharedValue(running ? 0 : 1);
+  useEffect(() => {
+    if (running) {
+      Keyboard.dismiss();
+    }
+    modeSectionOpacity.value = withTiming(running ? 0 : 1, {
+      duration: MODE_TRANSITION_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [running, modeSectionOpacity]);
+  const modeSectionStyle = useAnimatedStyle(() => ({ opacity: modeSectionOpacity.value }));
   const setHours = useCallback((hours: number) => setTargetHours(Math.max(1, Math.min(99, hours))), []);
   const complete = () => {
     if (activeFast) {
@@ -209,37 +214,31 @@ function Main() {
                     disabled={running || mode === 'end'}
                   />
                 </View>
-                <LayoutAnimationConfig skipEntering>
-                  <Animated.View
-                    key={labelKey}
-                    entering={labelTransitions[labelKey].entering}
-                    exiting={labelTransitions[labelKey].exiting}
-                    style={styles.layer}
-                    pointerEvents="none"
-                  >
-                    <Text style={styles.dialLabel}>{running ? 'Elapsed time' : 'Fasting duration'}</Text>
-                    <Text
-                      style={[
-                        styles.number,
-                        compactRing && styles.compactNumber,
-                        (running || mode === 'end') && styles.timer,
-                      ]}
-                    >
-                      {running
-                        ? formatElapsed(elapsedMs)
-                        : mode === 'end'
-                        ? formatDurationShort(plannedHours * HOUR_MS)
-                        : targetHours}
-                    </Text>
-                    <Text style={styles.dialLabel}>
-                      {running
-                        ? `${formatDurationShort(ringHours * HOUR_MS)} target`
-                        : mode === 'end'
-                        ? 'until your end time'
-                        : 'hours'}
-                    </Text>
-                  </Animated.View>
-                </LayoutAnimationConfig>
+                <GaugeLabels
+                  mode={mode}
+                  running={running}
+                  durationLabels={
+                    <>
+                      <Text style={styles.dialLabel}>Fasting duration</Text>
+                      <Text style={[styles.number, compactRing && styles.compactNumber]}>{targetHours}</Text>
+                      <Text style={styles.dialLabel}>hours</Text>
+                    </>
+                  }
+                  endLabels={
+                    <>
+                      <Text style={styles.dialLabel}>Fasting duration</Text>
+                      <Text style={[styles.number, styles.timer]}>{formatDurationShort(plannedHours * HOUR_MS)}</Text>
+                      <Text style={styles.dialLabel}>until your end time</Text>
+                    </>
+                  }
+                  runningLabels={
+                    <>
+                      <Text style={styles.dialLabel}>Elapsed time</Text>
+                      <Text style={[styles.number, styles.timer]}>{formatElapsed(elapsedMs)}</Text>
+                      <Text style={styles.dialLabel}>{`${formatDurationShort(ringHours * HOUR_MS)} target`}</Text>
+                    </>
+                  }
+                />
               </Animated.View>
             )}
           </View>
@@ -256,87 +255,90 @@ function Main() {
 
         {/* time and start/finish controls */}
         <Animated.View entering={controlsEntry} style={styles.controls}>
-          {!running && (
-            <>
-              <View style={styles.segment}>
-                {(['duration', 'end'] as const).map(item => (
+          <Animated.View
+            style={[styles.modeSection, modeSectionStyle]}
+            pointerEvents={running ? 'none' : 'auto'}
+            accessibilityElementsHidden={running}
+            importantForAccessibility={running ? 'no-hide-descendants' : 'auto'}
+          >
+            <View style={styles.segment}>
+              {(['duration', 'end'] as const).map(item => (
+                <Pressable
+                  key={item}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: mode === item }}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setMode(item);
+                  }}
+                  style={[styles.segmentItem, mode === item && styles.segmentActive]}
+                >
+                  <Text style={[styles.segmentText, mode === item && styles.selectedText]}>
+                    {item === 'duration' ? 'Duration' : 'End time'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <PanelCarousel index={mode === 'duration' ? 0 : 1} height={MODE_PANEL_HEIGHT}>
+              <View style={styles.presets}>
+                <Pressable
+                  accessibilityLabel="Decrease duration by one hour"
+                  accessibilityRole="button"
+                  disabled={targetHours <= 1}
+                  onPress={() => setHours(targetHours - 1)}
+                  style={styles.step}
+                >
+                  <Text style={styles.stepText}>−</Text>
+                </Pressable>
+                {[12, 16, 18, 24].map(hours => (
                   <Pressable
-                    key={item}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: mode === item }}
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      setMode(item);
-                    }}
-                    style={[styles.segmentItem, mode === item && styles.segmentActive]}
+                    key={hours}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: targetHours === hours }}
+                    onPress={() => setHours(hours)}
+                    style={[styles.preset, targetHours === hours && styles.presetActive]}
                   >
-                    <Text style={[styles.segmentText, mode === item && styles.selectedText]}>
-                      {item === 'duration' ? 'Duration' : 'End time'}
-                    </Text>
+                    <Text style={[styles.presetText, targetHours === hours && styles.orange]}>{hours}h</Text>
                   </Pressable>
                 ))}
+                <Pressable
+                  accessibilityLabel="Increase duration by one hour"
+                  accessibilityRole="button"
+                  disabled={targetHours >= 99}
+                  onPress={() => setHours(targetHours + 1)}
+                  style={styles.step}
+                >
+                  <Text style={styles.stepText}>+</Text>
+                </Pressable>
               </View>
-              <PanelCarousel index={mode === 'duration' ? 0 : 1} height={MODE_PANEL_HEIGHT}>
-                <View style={styles.presets}>
-                  <Pressable
-                    accessibilityLabel="Decrease duration by one hour"
-                    accessibilityRole="button"
-                    disabled={targetHours <= 1}
-                    onPress={() => setHours(targetHours - 1)}
-                    style={styles.step}
-                  >
-                    <Text style={styles.stepText}>−</Text>
-                  </Pressable>
-                  {[12, 16, 18, 24].map(hours => (
-                    <Pressable
-                      key={hours}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: targetHours === hours }}
-                      onPress={() => setHours(hours)}
-                      style={[styles.preset, targetHours === hours && styles.presetActive]}
-                    >
-                      <Text style={[styles.presetText, targetHours === hours && styles.orange]}>{hours}h</Text>
-                    </Pressable>
-                  ))}
-                  <Pressable
-                    accessibilityLabel="Increase duration by one hour"
-                    accessibilityRole="button"
-                    disabled={targetHours >= 99}
-                    onPress={() => setHours(targetHours + 1)}
-                    style={styles.step}
-                  >
-                    <Text style={styles.stepText}>+</Text>
-                  </Pressable>
-                </View>
-                <View style={styles.timeRow}>
-                  <Text style={styles.secondary}>
-                    End at<Text style={styles.timeNote}>{'\n'}24-hour time</Text>
-                  </Text>
-                  <TextInput
-                    accessibilityLabel="End hour, 0 to 23"
-                    value={endHour}
-                    onChangeText={setEndHour}
-                    onBlur={() => setEndHour(endHour.padStart(2, '0'))}
-                    keyboardType="number-pad"
-                    maxLength={2}
-                    selectTextOnFocus
-                    style={styles.timeInput}
-                  />
-                  <Text style={styles.stepText}>:</Text>
-                  <TextInput
-                    accessibilityLabel="End minute, 0 to 59"
-                    value={endMinute}
-                    onChangeText={setEndMinute}
-                    onBlur={() => setEndMinute(endMinute.padStart(2, '0'))}
-                    keyboardType="number-pad"
-                    maxLength={2}
-                    selectTextOnFocus
-                    style={styles.timeInput}
-                  />
-                </View>
-              </PanelCarousel>
-            </>
-          )}
+              <View style={styles.timeRow}>
+                <Text style={styles.secondary}>
+                  End at<Text style={styles.timeNote}>{'\n'}24-hour time</Text>
+                </Text>
+                <TextInput
+                  accessibilityLabel="End hour, 0 to 23"
+                  value={endHour}
+                  onChangeText={setEndHour}
+                  onBlur={() => setEndHour(endHour.padStart(2, '0'))}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  selectTextOnFocus
+                  style={styles.timeInput}
+                />
+                <Text style={styles.stepText}>:</Text>
+                <TextInput
+                  accessibilityLabel="End minute, 0 to 59"
+                  value={endMinute}
+                  onChangeText={setEndMinute}
+                  onBlur={() => setEndMinute(endMinute.padStart(2, '0'))}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  selectTextOnFocus
+                  style={styles.timeInput}
+                />
+              </View>
+            </PanelCarousel>
+          </Animated.View>
           <View style={styles.endSummary}>
             <Text style={styles.secondary}>
               {reached ? 'Past target by' : running ? 'Target ends' : 'Planned finish'}
@@ -405,6 +407,7 @@ const styles = StyleSheet.create({
   compactNumber: { fontSize: 44 },
   dialHint: { color: colors.textSecondary, fontSize: 12, marginTop: -12 },
   controls: { width: '100%', maxWidth: 420, alignSelf: 'center', flexShrink: 0, gap: 12 },
+  modeSection: { gap: 12 },
   segment: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: 12, padding: 4 },
   segmentItem: { flex: 1, paddingVertical: 11, alignItems: 'center', borderRadius: 9 },
   segmentActive: { backgroundColor: '#48433F' },

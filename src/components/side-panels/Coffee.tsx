@@ -1,14 +1,18 @@
-import { Linking, StyleSheet, Text, View } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { appFont, colors } from '../../theme';
 
 import { BUY_ME_A_COFFEE_URL } from '../../config';
 import CoffeeIcon from '../../../assets/icons/coffee.svg';
 import React from 'react';
-import SoftButton from '../SoftButton';
 
 const ICON_SIZE = 44;
 
 export default function Coffee() {
+  // Pressing scales the button down briefly so the tap reads as physical.
+  const scale = useSharedValue(1);
+  const pressStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
   return (
     <View style={styles.container}>
       <View style={styles.iconWrap}>
@@ -28,9 +32,21 @@ export default function Coffee() {
       </View>
 
       <View style={styles.buttonWrap}>
-        <SoftButton onPress={() => Linking.openURL(BUY_ME_A_COFFEE_URL).catch(() => {})} radius={22}>
-          <Text style={styles.buttonLabel}>Buy me a coffee</Text>
-        </SoftButton>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => Linking.openURL(BUY_ME_A_COFFEE_URL).catch(() => {})}
+          hitSlop={12}
+          onPressIn={() => {
+            scale.value = withTiming(0.92, { duration: 80 });
+          }}
+          onPressOut={() => {
+            scale.value = withTiming(1, { duration: 120 });
+          }}
+        >
+          <Animated.View style={[styles.button, pressStyle]}>
+            <Text style={styles.buttonLabel}>Buy me a coffee</Text>
+          </Animated.View>
+        </Pressable>
       </View>
     </View>
   );
@@ -64,6 +80,11 @@ const styles = StyleSheet.create({
   buttonWrap: {
     alignItems: 'center',
     marginTop: 12,
+  },
+  button: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.outline,
   },
   buttonLabel: {
     fontFamily: appFont,

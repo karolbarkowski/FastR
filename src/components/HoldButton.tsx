@@ -91,11 +91,16 @@ const styles = StyleSheet.create({
   button: {
     overflow: 'hidden',
     borderRadius: 18,
+    // The border is always present and only its color changes: toggling
+    // borderWidth on this rounded, overflow-hidden view leaves Android with a
+    // stale clip that hides the label after a fast ends.
+    borderWidth: 1,
+    borderColor: colors.accent,
     backgroundColor: colors.accent,
     minHeight: 66,
     justifyContent: 'center',
   },
-  running: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.outline },
+  running: { backgroundColor: colors.surface, borderColor: colors.outline },
   disabled: { opacity: 0.4 },
   fill: { position: 'absolute', top: 0, bottom: 0, left: 0, backgroundColor: 'rgba(255,255,255,0.25)' },
   content: { alignItems: 'center', padding: 12, gap: 4 },
